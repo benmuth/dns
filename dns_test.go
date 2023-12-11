@@ -151,10 +151,10 @@ func TestParsePacket(t *testing.T) {
 }
 
 func TestLookupDomain(t *testing.T) {
-	ip := lookupDomain("www.example.com")
+	ip := lookupDomain("example.com")
 	fmt.Printf("ip: %s\n", ip)
-	ip = lookupDomain("www.recurse.com")
+	ip = lookupDomain("recurse.com")
 	fmt.Printf("ip: %s\n", ip)
-	ip = lookupDomain("www.metafilter.com")
+	ip = lookupDomain("metafilter.com")
 	fmt.Printf("ip: %s\n", ip)
 }

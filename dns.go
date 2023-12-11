@@ -133,21 +133,17 @@ func parseHeader(response *bytes.Reader) (DNSHeader, error) {
 }
 
 func decodeNameSimple(response *bytes.Reader) (string, error) {
-	fmt.Println("parsing name from response")
 	parts := []string{}
 	length, err := response.ReadByte()
 	if err != nil {
 		return "", err
 	}
 	for length != 0 {
-		// fmt.Printf("length: %v\n", length)
 		nextPart := make([]byte, length)
-		n, err := response.Read(nextPart)
+		_, err := response.Read(nextPart)
 		if err != nil {
 			return "", err
 		}
-		fmt.Printf("read %v bytes\n", n)
-		fmt.Printf("next part: %s\n", nextPart)
 		parts = append(parts, string(nextPart))
 		length, err = response.ReadByte()
 		if err != nil {
@@ -158,15 +154,12 @@ func decodeNameSimple(response *bytes.Reader) (string, error) {
 }
 
 func decodeName(response *bytes.Reader) (string, error) {
-	fmt.Println("parsing name from response")
 	parts := []string{}
 	length, err := response.ReadByte()
 	if err != nil {
 		return "", fmt.Errorf("Failed to read first byte: %w", err)
 	}
-	// fmt.Printf("length: %v\n", length)
 	for length != 0 {
-		fmt.Printf("length: %v\n", length)
 		var nextPart []byte
 		if (length & 0b1100_0000) > 0 {
 			nextPart, err = decodeCompressedName(length, response)
@@ -180,7 +173,6 @@ func decodeName(response *bytes.Reader) (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("Failed to read next part: %w", err)
 			}
-			// fmt.Printf("read %v bytes\n", n)
 		}
 		parts = append(parts, string(nextPart))
 		length, err = response.ReadByte()
@@ -201,32 +193,25 @@ func decodeName(response *bytes.Reader) (string, error) {
 //     return result
 
 func decodeCompressedName(length byte, response *bytes.Reader) ([]byte, error) {
-	fmt.Println("parsing compressed name from response")
-	fmt.Printf("compressed name length: %v\n", length)
 	nextByte, err := response.ReadByte()
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("next byte: %0x\n", nextByte)
 	pointerBytes := []byte{length & 0b0011_1111, nextByte}
-	fmt.Printf("pointer bytes: %0 x\n", pointerBytes)
 	pointer := binary.BigEndian.Uint16(pointerBytes)
 	currentPos, err := response.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("current position: %v\n", currentPos)
-	pointerPos, err := response.Seek(int64(pointer), io.SeekStart)
+	_, err = response.Seek(int64(pointer), io.SeekStart)
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("pointer position: %v\n", pointerPos)
 	result, err := decodeName(response)
 	if err != nil {
 		return nil, err
 	}
 	currentPos, err = response.Seek(currentPos, io.SeekStart)
-	fmt.Printf("new current position: %v\n", currentPos)
 	if err != nil {
 		return nil, err
 	}
@@ -271,9 +256,7 @@ func parseRecord(response *bytes.Reader) (DNSRecord, error) {
 	if err != nil {
 		return DNSRecord{}, fmt.Errorf("Failed to read metadata: %w", err)
 	}
-	fmt.Printf("metadata: %0 x\n", metaData)
 	dataLen := binary.BigEndian.Uint16(metaData[8:])
-	fmt.Printf("data len: %v\n", dataLen)
 	data := make([]byte, dataLen)
 	n, err := response.Read(data)
 	if err != nil {
@@ -340,7 +323,6 @@ func parseDNSPacket(responseBytes []byte) (DNSPacket, error) {
 	if err != nil {
 		return DNSPacket{}, fmt.Errorf("Failed to parse header: %w", err)
 	}
-	fmt.Printf("header: %+v\n", header)
 	questions := make([]DNSQuestion, header.numQuestions)
 	for i := 0; i < len(questions); i++ {
 		q, err := parseQuestion(response)
@@ -402,12 +384,10 @@ func sendQuery(domain string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// fmt.Printf("%s\n", query)
 	_, err = conn.Write(query)
 	if err != nil {
 		return nil, err
 	}
-	// fmt.Printf("%v bytes sent\n", n)
 
 	buffer := make([]byte, 1024)
 	n, _, err := conn.ReadFromUDP(buffer)
@@ -415,28 +395,23 @@ func sendQuery(domain string) ([]byte, error) {
 		return nil, err
 	}
 
-	// fmt.Println("Received", n, "bytes from", addr)
 	response := buffer[:n]
-	// fmt.Printf("received response: \n%s\n", response)
 	return response, nil
 }
 
+// TODO: This prints the wrong IP address if the domain contains 'www'
+// HINT: Look at the record type!
 func lookupDomain(domain string) string {
 	response, err := sendQuery(domain)
 	if err != nil {
 		fmt.Printf("Failed to send query: %s\n", err)
 	}
 
-	fmt.Printf("response length: %v\n", len(response))
-	fmt.Printf("response: %0 x\n", response)
-	// fmt.Printf("response domain name: %0 x\n", response[12:30])
-
 	packet, err := parseDNSPacket(response)
 	if err != nil {
 		fmt.Printf("Failed to parse packet: %s\n", err)
 	}
-	fmt.Printf("packet: %+v\n", packet)
-
+	// fmt.Printf("raw ip data: %d\n", packet.answers[0].data)
 	ip := IPAddr(packet.answers[0].data)
 	return ip.String()
 }
