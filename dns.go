@@ -32,16 +32,8 @@ type DNSQuestion struct {
 }
 
 func headerToBytes(header DNSHeader) ([]byte, error) {
-	fields := [6]uint16{
-		header.id,
-		header.flags,
-		header.num_questions,
-		header.num_answers,
-		header.num_authorities,
-		header.num_additionals,
-	}
 	buf := new(bytes.Buffer)
-	err := binary.Write(buf, binary.BigEndian, fields)
+	err := binary.Write(buf, binary.BigEndian, header)
 	if err != nil {
 		return nil, err
 	}
@@ -49,12 +41,8 @@ func headerToBytes(header DNSHeader) ([]byte, error) {
 }
 
 func questionToBytes(question DNSQuestion) ([]byte, error) {
-	fields := [2]uint16{
-		question.type_,
-		question.class,
-	}
 	buf := new(bytes.Buffer)
-	err := binary.Write(buf, binary.BigEndian, fields)
+	err := binary.Write(buf, binary.BigEndian, [2]uint16{question.type_, question.class})
 	if err != nil {
 		return nil, err
 	}
@@ -72,14 +60,6 @@ func encodeDNSName(domain string) ([]byte, error) {
 	_ = buf.WriteByte(0)
 	return buf.Bytes(), nil
 }
-
-// def build_query(domain_name, record_type):
-//     name = encode_dns_name(domain_name)
-//     id = random.randint(0, 65535)
-//     RECURSION_DESIRED = 1 << 8
-//     header = DNSHeader(id=id, num_questions=1, flags=RECURSION_DESIRED)
-//     question = DNSQuestion(name=name, type_=record_type, class_=CLASS_IN)
-//     return header_to_bytes(header) + question_to_bytes(question)
 
 const TYPE_A = 1
 const CLASS_IN = 1
