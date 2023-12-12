@@ -12,29 +12,68 @@ import (
 	"strings"
 )
 
-// class DNSHeader:
-//     id: int
-//     flags: int
-//     num_questions: int = 0
-//     num_answers: int = 0
-//     num_authorities: int = 0
-//     num_additionals: int = 0
+const (
+	typeA   = 1
+	typeNS  = 2
+	typeTXT = 16
+	classIn = 1
+)
 
+// A DNSHeader is the first part of a DNS query
 type DNSHeader struct {
-	id             uint16
-	flags          uint16
+	// the id is a random ID for the query
+	id uint16
+	// flags indicate different options, like whether to use recursion
+	flags uint16
+
+	// the following 4 fields indicate how many records to expect in each
+	// section of a DNS packet
+
 	numQuestions   uint16
 	numAnswers     uint16
 	numAuthorities uint16
 	numAdditionals uint16
 }
 
+// A DNSQuestion is the second part of a DNS query
 type DNSQuestion struct {
-	name  []byte
+	// name is the domain name (like example.com)
+	name []byte
+	// type_ indicates the type of record (like A, AAAA, NS, etc.)
 	type_ uint16
 	class uint16
 }
 
+// A DNSRecord represents the answer to a DNS query
+type DNSRecord struct {
+	// name is the domain name (like example.com)
+	name []byte
+	// type_ indicates the type of record (like A, AAAA, NS, etc.) encoded
+	// as an int
+	type_ uint16
+	// class is always the same for now TODO: look up what this is
+	class uint16
+	// ttl indicates how long to cache the query
+	ttl uint32
+	// data holds the record's content, like the IP Address
+	data []byte
+}
+
+// DNSPacket holds the data from an entire DNS response
+type DNSPacket struct {
+	header    DNSHeader
+	questions []DNSQuestion
+	// answers holds the records that directly answer the DNS question in the
+	// original query
+	answers []DNSRecord
+	// authorities holds the records for the authoritative name servers for
+	// the given domain
+	authorities []DNSRecord
+	// additionals holds records with potentially useful additional information
+	additionals []DNSRecord
+}
+
+// headerToBytes converts a DNSHeader to bytes
 func headerToBytes(header DNSHeader) ([]byte, error) {
 	buf := new(bytes.Buffer)
 	err := binary.Write(buf, binary.BigEndian, header)
@@ -44,6 +83,7 @@ func headerToBytes(header DNSHeader) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// questionToBytes converts a DNSquestion to bytes
 func questionToBytes(question DNSQuestion) ([]byte, error) {
 	buf := new(bytes.Buffer)
 	err := binary.Write(buf, binary.BigEndian, [2]uint16{question.type_, question.class})
@@ -53,6 +93,8 @@ func questionToBytes(question DNSQuestion) ([]byte, error) {
 	return append(question.name, buf.Bytes()...), nil
 }
 
+// encodeDNSName converts a name like 'google.com' to "\x06google\x03com\x00"
+// where each part is prepended with its length
 func encodeDNSName(domain string) ([]byte, error) {
 	buf := new(bytes.Buffer)
 	for _, part := range strings.Split(domain, ".") {
@@ -65,18 +107,14 @@ func encodeDNSName(domain string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-const TYPE_A = 1
-const CLASS_IN = 1
-
 func buildQuery(domainName string, recordType uint16) ([]byte, error) {
 	name, err := encodeDNSName(domainName)
 	if err != nil {
 		panic(err)
 	}
 	id := uint16(rand.Intn(65535))
-	recursionDesired := uint16(1 << 8)
-	header := DNSHeader{id: id, numQuestions: 1, flags: recursionDesired}
-	question := DNSQuestion{name: name, type_: recordType, class: CLASS_IN}
+	header := DNSHeader{id: id, numQuestions: 1, flags: 0}
+	question := DNSQuestion{name: name, type_: recordType, class: classIn}
 	headerBytes, err := headerToBytes(header)
 	if err != nil {
 		return nil, err
@@ -88,27 +126,8 @@ func buildQuery(domainName string, recordType uint16) ([]byte, error) {
 	return append(headerBytes, questionBytes...), nil
 }
 
-type DNSRecord struct {
-	// Domain name
-	name []byte
-	// A, AAAA, MX, NS, TXT, etc (encoded as an int)
-	type_ uint16
-	// Always the same for now TODO: look up what this is
-	class uint16
-	// How long to cache the query
-	ttl uint32
-	// The record's content, like the IP Address
-	data []byte
-}
-
-//	func headerToBytes(header DNSHeader) ([]byte, error) {
-//		buf := new(bytes.Buffer)
-//		err := binary.Write(buf, binary.BigEndian, header)
-//		if err != nil {
-//			return nil, err
-//		}
-//		return buf.Bytes(), nil
-//	}
+// parseHeader reads from a response to a DNS query and returns a DNSHeader.
+// parseHeader should be called before parseQuestion or parseRecord.
 func parseHeader(response *bytes.Reader) (DNSHeader, error) {
 	const DNSHeaderSize = 12
 	headerBytes := make([]byte, DNSHeaderSize)
@@ -132,27 +151,7 @@ func parseHeader(response *bytes.Reader) (DNSHeader, error) {
 	return header, nil
 }
 
-func decodeNameSimple(response *bytes.Reader) (string, error) {
-	parts := []string{}
-	length, err := response.ReadByte()
-	if err != nil {
-		return "", err
-	}
-	for length != 0 {
-		nextPart := make([]byte, length)
-		_, err := response.Read(nextPart)
-		if err != nil {
-			return "", err
-		}
-		parts = append(parts, string(nextPart))
-		length, err = response.ReadByte()
-		if err != nil {
-			return "", err
-		}
-	}
-	return strings.Join(parts, "."), nil
-}
-
+// decodeName decodes a (possibly compressed) DNS name.
 func decodeName(response *bytes.Reader) (string, error) {
 	parts := []string{}
 	length, err := response.ReadByte()
@@ -166,6 +165,7 @@ func decodeName(response *bytes.Reader) (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("Failed to decode compressed name: %w", err)
 			}
+			parts = append(parts, string(nextPart))
 			break
 		} else {
 			nextPart = make([]byte, length)
@@ -173,8 +173,8 @@ func decodeName(response *bytes.Reader) (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("Failed to read next part: %w", err)
 			}
+			parts = append(parts, string(nextPart))
 		}
-		parts = append(parts, string(nextPart))
 		length, err = response.ReadByte()
 		if err != nil {
 			return "", fmt.Errorf("Failed to read length byte: %w", err)
@@ -183,15 +183,7 @@ func decodeName(response *bytes.Reader) (string, error) {
 	return strings.Join(parts, "."), nil
 }
 
-// def decode_compressed_name(length, reader):
-//     pointer_bytes = bytes([length & 0b0011_1111]) + reader.read(1)
-//     pointer = struct.unpack("!H", pointer_bytes)[0]
-//     current_pos = reader.tell()
-//     reader.seek(pointer)
-//     result = decode_name(reader)
-//     reader.seek(current_pos)
-//     return result
-
+// decodeCompressedName is a helper function for decodeName.
 func decodeCompressedName(length byte, response *bytes.Reader) ([]byte, error) {
 	nextByte, err := response.ReadByte()
 	if err != nil {
@@ -218,6 +210,9 @@ func decodeCompressedName(length byte, response *bytes.Reader) ([]byte, error) {
 	return []byte(result), nil
 }
 
+// parseQuestion reads from a response to a DNS query and returns a
+// DNSQuestion. parseQuestion should be called after parseHeader and
+// before parseRecord.
 func parseQuestion(response *bytes.Reader) (DNSQuestion, error) {
 	name, err := decodeName(response)
 	if err != nil {
@@ -236,87 +231,62 @@ func parseQuestion(response *bytes.Reader) (DNSQuestion, error) {
 	}, nil
 }
 
-// def parse_record(reader):
-//     name = decode_name_simple(reader)
-//     # the the type, class, TTL, and data length together are 10 bytes (2 + 2 + 4 + 2 = 10)
-//     # so we read 10 bytes
-//     data = reader.read(10)
-//     # HHIH means 2-byte int, 2-byte-int, 4-byte int, 2-byte int
-//     type_, class_, ttl, data_len = struct.unpack("!HHIH", data)
-//     data = reader.read(data_len)
-//     return DNSRecord(name, type_, class_, ttl, data)
-
+// parseRecord reads from a response to a DNS query and returns a DNSRecord.
+// parseRecord should be called after parseHeader and parseQuestion.
 func parseRecord(response *bytes.Reader) (DNSRecord, error) {
 	name, err := decodeName(response)
 	if err != nil {
 		return DNSRecord{}, fmt.Errorf("Failed to decode name: %w", err)
 	}
+	// the the type, class, TTL, and data length together are 10 bytes (2 + 2 + 4 + 2 = 10)
 	metaData := make([]byte, 10)
 	_, err = response.Read(metaData)
 	if err != nil {
 		return DNSRecord{}, fmt.Errorf("Failed to read metadata: %w", err)
 	}
+
 	dataLen := binary.BigEndian.Uint16(metaData[8:])
 	data := make([]byte, dataLen)
-	n, err := response.Read(data)
-	if err != nil {
-		return DNSRecord{}, fmt.Errorf("Failed to read data: %w", err)
-	}
-	if n != int(dataLen) {
-		return DNSRecord{}, fmt.Errorf("Failed to read correct amount of bytes: expected %v, read %v", dataLen, n)
-	}
+	type_ := binary.BigEndian.Uint16(metaData[:2])
+	if type_ == typeNS {
+		name, err := decodeName(response)
+		if err != nil {
+			return DNSRecord{}, nil
+		}
+		data = []byte(name)
+	} else {
+		_, err := response.Read(data)
+		if err != nil {
+			return DNSRecord{}, fmt.Errorf("Failed to read data: %w", err)
+		}
 
+		if type_ == typeA {
+			data = []byte(ipToStr(data))
+		}
+	}
 	return DNSRecord{
 		name:  []byte(name),
-		type_: binary.BigEndian.Uint16(metaData[:2]),
+		type_: type_,
 		class: binary.BigEndian.Uint16(metaData[2:4]),
 		ttl:   binary.BigEndian.Uint32(metaData[4:8]),
 		data:  data,
 	}, nil
 }
 
-// from typing import List
-
-// @dataclass
-// class DNSPacket:
-//     header: DNSHeader
-//     questions: List[DNSQuestion]
-//     # don't worry about the exact meaning of these 3 record
-//     # sections for now: we'll use them in Part 3
-//     answers: List[DNSRecord]
-//     authorities: List[DNSRecord]
-//     additionals: List[DNSRecord]
-
-type DNSPacket struct {
-	header    DNSHeader
-	questions []DNSQuestion
-	// don't worry about the exact meaning of these 3 record
-	// sections for now: we'll use them in Part 3
-	answers     []DNSRecord
-	authorities []DNSRecord
-	additionals []DNSRecord
-}
-
-type IPAddr []byte
-
-func (ip IPAddr) String() string {
-	parts := make([]string, len(ip))
-	for i, b := range ip {
-		parts[i] = strconv.Itoa(int(b))
+// parseSection parses n records from response
+func parseSection(n uint16, response *bytes.Reader) ([]DNSRecord, error) {
+	records := make([]DNSRecord, n)
+	for i := 0; i < len(records); i++ {
+		r, err := parseRecord(response)
+		if err != nil {
+			return nil, fmt.Errorf("Failed to parse record: %w", err)
+		}
+		records[i] = r
 	}
-	str := strings.Join(parts, ".")
-	return str
+	return records, nil
 }
 
-// def parse_dns_packet(data):
-//     reader = BytesIO(data)
-//     header = parse_header(reader)
-//     questions = [parse_question(reader) for _ in range(header.num_questions)]
-//     answers = [parse_record(reader) for _ in range(header.num_answers)]
-//     authorities = [parse_record(reader) for _ in range(header.num_authorities)]
-//     additionals = [parse_record(reader) for _ in range(header.num_additionals)]
-
-// return DNSPacket(header, questions, answers, authorities, additionals)
+// parseDNSPacket parses a response to a DNS query
 func parseDNSPacket(responseBytes []byte) (DNSPacket, error) {
 	response := bytes.NewReader(responseBytes)
 	header, err := parseHeader(response)
@@ -332,31 +302,16 @@ func parseDNSPacket(responseBytes []byte) (DNSPacket, error) {
 		questions[i] = q
 	}
 
-	answers := make([]DNSRecord, header.numAnswers)
-	for i := 0; i < len(answers); i++ {
-		a, err := parseRecord(response)
-		if err != nil {
-			return DNSPacket{}, fmt.Errorf("Failed to parse answer: %w", err)
-		}
-		answers[i] = a
+	answers, err := parseSection(header.numAnswers, response)
+	if err != nil {
+		return DNSPacket{}, fmt.Errorf("Failed to parse answer: %w", err)
 	}
 
-	authorities := make([]DNSRecord, header.numAuthorities)
-	for i := 0; i < len(authorities); i++ {
-		a, err := parseRecord(response)
-		if err != nil {
-			return DNSPacket{}, fmt.Errorf("Failed to parse authority: %w", err)
-		}
-		authorities[i] = a
-	}
+	authorities, err := parseSection(header.numAuthorities, response)
 
-	additionals := make([]DNSRecord, header.numAdditionals)
-	for i := 0; i < len(additionals); i++ {
-		a, err := parseRecord(response)
-		if err != nil {
-			return DNSPacket{}, fmt.Errorf("Failed to parse additional: %w", err)
-		}
-		additionals[i] = a
+	additionals, err := parseSection(header.numAdditionals, response)
+	if err != nil {
+		return DNSPacket{}, fmt.Errorf("Failed to parse answer: %w", err)
 	}
 
 	return DNSPacket{
@@ -368,58 +323,111 @@ func parseDNSPacket(responseBytes []byte) (DNSPacket, error) {
 	}, nil
 }
 
-func sendQuery(domain string) ([]byte, error) {
-	UDPAddr, err := net.ResolveUDPAddr("udp", "8.8.8.8:53")
+// sendQuery sends a DNS query for the given domain to the given ipAddress
+func sendQuery(ipAddress string, domain string, recordType uint16) (DNSPacket, error) {
+	UDPAddr, err := net.ResolveUDPAddr("udp", ipAddress+":53")
 	if err != nil {
-		return nil, err
+		return DNSPacket{}, err
 	}
 
 	conn, err := net.DialUDP("udp", nil, UDPAddr)
 	if err != nil {
-		return nil, err
+		return DNSPacket{}, err
 	}
 	defer conn.Close()
 
-	query, err := buildQuery(domain, 1)
+	query, err := buildQuery(domain, recordType)
 	if err != nil {
-		return nil, err
+		return DNSPacket{}, err
 	}
 	_, err = conn.Write(query)
 	if err != nil {
-		return nil, err
+		return DNSPacket{}, err
 	}
 
 	buffer := make([]byte, 1024)
 	n, _, err := conn.ReadFromUDP(buffer)
 	if err != nil {
-		return nil, err
+		return DNSPacket{}, err
 	}
 
 	response := buffer[:n]
-	return response, nil
+
+	return parseDNSPacket(response)
 }
 
-// TODO: This prints the wrong IP address if the domain contains 'www'
-// HINT: Look at the record type!
-func lookupDomain(domain string) string {
-	response, err := sendQuery(domain)
-	if err != nil {
-		fmt.Printf("Failed to send query: %s\n", err)
+func getAnswer(packet DNSPacket) string {
+	for _, x := range packet.answers {
+		if x.type_ == typeA {
+			return string(x.data)
+		}
 	}
+	return ""
+}
 
-	packet, err := parseDNSPacket(response)
+func getNameserverIp(packet DNSPacket) string {
+	for _, x := range packet.additionals {
+		if x.type_ == typeA {
+			return string(x.data)
+		}
+	}
+	return ""
+}
+
+func getNameserver(packet DNSPacket) string {
+	for _, x := range packet.authorities {
+		if x.type_ == typeNS {
+			return string(x.data)
+		}
+	}
+	return ""
+}
+
+// resolve returns the ip address for a given domainName
+func resolve(domainName string, recordType int) (string, error) {
+	nameserver := ("198.41.0.4")
+	for {
+		fmt.Printf("querying %s for %s\n", nameserver, domainName)
+		response, err := sendQuery(nameserver, domainName, uint16(recordType))
+		if err != nil {
+			return "", err
+		}
+
+		if ip := getAnswer(response); ip != "" {
+			return ip, nil
+		} else if nsIp := getNameserverIp(response); nsIp != "" {
+			nameserver = nsIp
+		} else if nsDomain := getNameserver(response); nsDomain != "" {
+			nameserver, err = resolve(nsDomain, typeA)
+			if err != nil {
+				return "", err
+			}
+		} else {
+			return "", fmt.Errorf("couldn't resolve")
+		}
+	}
+}
+
+// BUG: This prints the wrong IP address if the domain contains 'www'
+// HINT: Look at the record type!
+func lookupDomain(ipAddress string, domain string, recordType uint16) string {
+	packet, err := sendQuery(ipAddress, domain, recordType)
 	if err != nil {
 		fmt.Printf("Failed to parse packet: %s\n", err)
 	}
-	// fmt.Printf("raw ip data: %d\n", packet.answers[0].data)
-	ip := IPAddr(packet.answers[0].data)
-	return ip.String()
+	ip := packet.answers[0].data
+	return ipToStr(ip)
 }
 
-func main() {
-	// fmt.Println("Hello world!")
-	// header := DNSHeader{
-	// 	1, 2, 3, 4, 5, 6,
-	// }
-	// headerToBytes(header)
+func ipToStr(ip []byte) string {
+	parts := make([]string, len(ip))
+	for i, b := range ip {
+		parts[i] = strconv.Itoa(int(b))
+	}
+	str := strings.Join(parts, ".")
+	return str
+}
+
+func (rec DNSRecord) String() string {
+	return fmt.Sprintf("name: %s\tdata: %s\n", rec.name, rec.data)
 }

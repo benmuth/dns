@@ -3,11 +3,44 @@ package dns
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"reflect"
 	"testing"
 )
 
 const testDomain = "www.example.com"
+
+func sendTestQuery(domain string) ([]byte, error) {
+	UDPAddr, err := net.ResolveUDPAddr("udp", "8.8.8.8:53")
+	if err != nil {
+		return nil, err
+	}
+
+	conn, err := net.DialUDP("udp", nil, UDPAddr)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	query, err := buildQuery(domain, 1)
+	if err != nil {
+		return nil, err
+	}
+	_, err = conn.Write(query)
+	if err != nil {
+		return nil, err
+	}
+
+	buffer := make([]byte, 1024)
+	n, _, err := conn.ReadFromUDP(buffer)
+	if err != nil {
+		return nil, err
+	}
+
+	response := buffer[:n]
+
+	return response, nil
+}
 
 func TestEncodeDNSName(t *testing.T) {
 	tests := []struct {
@@ -35,7 +68,7 @@ func TestEncodeDNSName(t *testing.T) {
 
 func TestBuildQuery(t *testing.T) {
 	// TODO: test building the query and not sending a request
-	_, err := sendQuery(testDomain)
+	_, err := sendTestQuery(testDomain)
 	if err != nil {
 		t.Fatalf("Failed to send query. %s\n", err)
 	}
@@ -43,18 +76,17 @@ func TestBuildQuery(t *testing.T) {
 }
 
 func TestParseHeader(t *testing.T) {
-	response, err := sendQuery(testDomain)
+	response, err := sendTestQuery(testDomain)
 	if err != nil {
 		t.Fatalf("Failed to send query. %s\n", err)
 	}
 	reader := bytes.NewReader(response)
 	_, err = parseHeader(reader)
 	// fmt.Printf("header received: %+v\n", header)
-
 }
 
 func TestParseName(t *testing.T) {
-	response, err := sendQuery(testDomain)
+	response, err := sendTestQuery(testDomain)
 	if err != nil {
 		t.Fatalf("Failed to send query: %s\n", err)
 	}
@@ -74,7 +106,7 @@ func TestParseName(t *testing.T) {
 }
 
 func TestParseQuestion(t *testing.T) {
-	response, err := sendQuery(testDomain)
+	response, err := sendTestQuery(testDomain)
 	if err != nil {
 		t.Fatalf("Failed to send query: %s\n", err)
 	}
@@ -100,7 +132,7 @@ func TestParseQuestion(t *testing.T) {
 }
 
 func TestParseRecord(t *testing.T) {
-	response, err := sendQuery(testDomain)
+	response, err := sendTestQuery(testDomain)
 	if err != nil {
 		t.Fatalf("Failed to send query: %s\n", err)
 	}
@@ -128,7 +160,7 @@ func TestParseRecord(t *testing.T) {
 }
 
 func TestParsePacket(t *testing.T) {
-	response, err := sendQuery(testDomain)
+	response, err := sendTestQuery(testDomain)
 	if err != nil {
 		t.Fatalf("Failed to send query: %s\n", err)
 	}
@@ -143,7 +175,7 @@ func TestParsePacket(t *testing.T) {
 	}
 	fmt.Printf("packet: %+v\n", packet)
 
-	ip := IPAddr(packet.answers[0].data)
+	ip := ipToStr(packet.answers[0].data)
 	fmt.Printf("packet data: %s\n", ip)
 
 	// fmt.Printf("%0x\n", 0b1100_0000)
@@ -151,10 +183,52 @@ func TestParsePacket(t *testing.T) {
 }
 
 func TestLookupDomain(t *testing.T) {
-	ip := lookupDomain("example.com")
+	const ipAddress = "8.8.8.8"
+	const recordType = 1
+	ip := lookupDomain(ipAddress, "example.com", recordType)
 	fmt.Printf("ip: %s\n", ip)
-	ip = lookupDomain("recurse.com")
+	ip = lookupDomain(ipAddress, "recurse.com", recordType)
 	fmt.Printf("ip: %s\n", ip)
-	ip = lookupDomain("metafilter.com")
+	ip = lookupDomain(ipAddress, "metafilter.com", recordType)
+	fmt.Printf("ip: %s\n", ip)
+}
+
+func TestSendQuery(t *testing.T) {
+	// packet, err := sendQuery("8.8.8.8", "example.com", 1)
+	// if err != nil {
+	// 	t.Fatalf("Failed to send query: %s", err)
+	// }
+	// fmt.Printf("answers: %+v\n", packet.answers[0])
+
+	// ip := "198.41.0.4"
+	// ip := "192.12.94.30"
+	// ip := "216.239.34.10"
+	ip := "216.239.32.10"
+	// ip := "142.251.116.139"
+
+	response, err := sendQuery(ip, "google.com", typeA)
+	fmt.Printf("%+v\n", response.answers)
+	fmt.Printf("data: %s\n", response.answers[0].data)
+
+	if err != nil {
+		t.Fatalf("Failed to send query: %s", err)
+	}
+	fmt.Println("AUTHORITIES")
+	for _, auth := range response.authorities {
+		fmt.Printf("%+v\n", auth)
+		fmt.Printf("data: %s\n", auth.data)
+	}
+	fmt.Println("ADDITIONALS")
+	for _, add := range response.additionals {
+		fmt.Printf("%+v\n", add)
+		fmt.Printf("data: %s\n", add.data)
+	}
+}
+
+func TestResolve(t *testing.T) {
+	ip, err := resolve("twitter.com", typeA)
+	if err != nil {
+		t.Fatalf("Failed to resolve: %s", err)
+	}
 	fmt.Printf("ip: %s\n", ip)
 }
